@@ -1,431 +1,925 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 from sklearn.ensemble import IsolationForest
 import mysql.connector
 import bcrypt
 import random
 from datetime import datetime, timedelta
 import requests
-import base64
 
-
-# --------------------------
+# =====================================================
 # PAGE CONFIG
-# --------------------------
-st.set_page_config(page_title="Cyber SOC Dashboard", layout="wide")
+# =====================================================
+st.set_page_config(
+    page_title="Cyber SOC Dashboard",
+    layout="wide"
+)
 
-
-def set_bg():
-    with open("bg.png", "rb") as f:
-        data = f.read()
-    b64 = base64.b64encode(data).decode()
-
-    st.markdown(f"""
-    <style>
-    .stApp {{
-        background-image: url("data:image/png;base64,{b64}");
-        background-size: cover;
-        background-position: center;
-    }}
-    </style>
-    """, unsafe_allow_html=True)
-
-set_bg()
-
-# --------------------------
+# =====================================================
 # GLOBAL STYLE
-# --------------------------
+# =====================================================
 st.markdown("""
 <style>
-.stApp {
-    background: linear-gradient(135deg, #020617, #0f172a);
-    color: white;
+
+.stApp{
+    background: linear-gradient(135deg,#071426,#0b2a4a);
+    color:white;
+    font-family:Arial;
 }
 
-/* Login Box */
-.login-box {
-    background: rgba(15, 23, 42, 0.9);
-    padding: 40px;
-    border-radius: 15px;
-    width: 400px;
-    margin: auto;
-    margin-top: 80px;
-    box-shadow: 0 0 40px rgba(0,0,0,0.5);
+h1,h2,h3,h4{
+    color:#00c6ff;
 }
 
-/* Inputs */
-input {
-    background: #020617 !important;
-    color: white !important;
+.login-box{
+    background:rgba(255,255,255,0.05);
+    padding:30px;
+    border-radius:15px;
+    backdrop-filter:blur(10px);
+    width:420px;
+    margin:auto;
+    margin-top:60px;
+    box-shadow:0 0 20px rgba(0,0,0,0.5);
 }
 
-/* Button */
-.stButton > button {
-    width: 100%;
-    border-radius: 10px;
-    background: linear-gradient(90deg, #2563eb, #3b82f6);
-    color: white;
-    border: none;
+.metric-box{
+    background:rgba(255,255,255,0.05);
+    padding:20px;
+    border-radius:12px;
+    text-align:center;
 }
+
+.stButton > button{
+    background:linear-gradient(90deg,#00c6ff,#0072ff);
+    color:white;
+    border:none;
+    border-radius:10px;
+    height:45px;
+    width:100%;
+    font-size:16px;
+}
+
+input{
+    background:#020617 !important;
+    color:white !important;
+}
+
+[data-testid="stSidebar"]{
+    background:#020617;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
-# --------------------------
-# DATABASE
-# --------------------------
+# =====================================================
+# DATABASE CONNECTION
+# =====================================================
 def connect_db():
     return mysql.connector.connect(
         host="localhost",
         user="root",
-        password="aditya",  # change if needed
+        password="aditya",
         database="cyber_db"
     )
 
-# --------------------------
-# SESSION
-# --------------------------
+# =====================================================
+# SESSION STATE
+# =====================================================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
+
 if "role" not in st.session_state:
     st.session_state.role = ""
-if "blocked_ips" not in st.session_state:
-    st.session_state.blocked_ips = []  
 
-# --------------------------
+if "blocked_ips" not in st.session_state:
+    st.session_state.blocked_ips = []
+
+# =====================================================
+# PASSWORD FUNCTIONS
+# =====================================================
+def hash_password(password):
+    return bcrypt.hashpw(
+        password.encode(),
+        bcrypt.gensalt()
+    ).decode()
+
+def verify_password(password, hashed):
+    try:
+        return bcrypt.checkpw(
+            password.encode(),
+            hashed.encode()
+        )
+    except:
+        return password == hashed
+
+# =====================================================
 # REAL IP
-# --------------------------
+# =====================================================
 def get_real_ip():
     try:
         headers = st.context.headers
-        ip = headers.get("x-forwarded-for", "127.0.0.1")
+        ip = headers.get(
+            "x-forwarded-for",
+            "127.0.0.1"
+        )
         return ip.split(",")[0]
     except:
         return "127.0.0.1"
 
-# --------------------------
-# SAVE LOGIN LOG (NEW)
-# --------------------------
+# =====================================================
+# SAVE LOGIN LOG
+# =====================================================
 def save_log(user, status):
+
     conn = connect_db()
     cursor = conn.cursor()
 
-    ip = get_real_ip()  # demo
+    ip = get_real_ip()
 
     cursor.execute("""
-        INSERT INTO logs (username, ip_address, login_time, status)
+        INSERT INTO logs
+        (username, ip_address, login_time, status)
         VALUES (%s,%s,%s,%s)
-    """, (user, ip, datetime.now(), status))
+    """, (
+        user,
+        ip,
+        datetime.now(),
+        status
+    ))
 
     conn.commit()
     conn.close()
-# --------------------------
+
+# =====================================================
 # CAPTCHA
-# --------------------------
+# =====================================================
 def generate_captcha():
-    return str(random.randint(1000,9999))
+    return str(random.randint(1000, 9999))
 
-
-# --------------------------
+# =====================================================
 # OTP
-# --------------------------
+# =====================================================
 def generate_otp():
-    return str(random.randint(100000,999999))
+    return str(random.randint(100000, 999999))
 
-
-# --------------------------
+# =====================================================
 # LOCATION API
-# --------------------------
+# =====================================================
 @st.cache_data
 def get_location(ip):
+
     try:
-        res = requests.get(f"http://ip-api.com/json/{ip}")
+        res = requests.get(
+            f"http://ip-api.com/json/{ip}"
+        )
+
         data = res.json()
+
         return data.get("lat"), data.get("lon")
+
     except:
         return None, None
 
-# --------------------------
-# AUTH (HACKER UI)
-# --------------------------
-def auth():
-    st.title("💀 Cyber Login Terminal")
-    st.markdown('<div class="login-box">', unsafe_allow_html=True)
-    st.markdown("### 🔐 Welcome Back")
-    st.write("Login to Cyber SOC Dashboard")
-
-    menu = st.sidebar.selectbox("Menu", ["Login","Register","Reset Password"])
-
-    conn = connect_db()
-    cursor = conn.cursor()
-
-    # -------- REGISTER --------
-    if menu=="Register":
-        user = st.text_input("Username")
-        pwd = st.text_input("Password", type="password")
-
-        if st.button("Register"):
-            hashed = bcrypt.hashpw(pwd.encode(), bcrypt.gensalt()).decode()
-            cursor.execute("INSERT INTO users (username,password,role) VALUES (%s,%s,%s)",
-                           (user,hashed,"user"))
-            conn.commit()
-            st.success("User Created")
-
-    # -------- LOGIN --------
-    elif menu=="Login":
-        user = st.text_input("Username")
-        pwd = st.text_input("Password", type="password")
-
-        ip = get_real_ip()
-        if ip in st.session_state.blocked_ips:
-            st.error("🚫 Your IP is blocked")
-            st.stop()
-
-        if st.button("Login"):
-            cursor.execute("SELECT password,role FROM users WHERE username=%s",(user,))
-            data = cursor.fetchone()
-
-            if data:
-                stored, role = data
-
-                try:
-                    valid = bcrypt.checkpw(pwd.encode(), stored.encode())
-                except:
-                    valid = (pwd == stored)
-
-                if valid:
-                    otp = generate_otp()
-                    st.session_state.otp = otp
-                    st.session_state.temp_user = user
-                    st.session_state.temp_role = role
-                    st.warning(f"OTP (demo): {otp}")
-                else:
-                    save_log(user,"failed")
-                    st.error("Wrong Password ❌")
-            else:
-                save_log(user,"failed")
-                st.error("User Not Found ❌")
-
-    # -------- OTP VERIFY --------
-    if "otp" in st.session_state:
-        entered = st.text_input("Enter OTP")
-
-        if st.button("Verify OTP"):
-            if entered == st.session_state.otp:
-                st.session_state.logged_in = True
-                st.session_state.role = st.session_state.temp_role
-                save_log(st.session_state.temp_user,"success")
-                del st.session_state.otp
-                st.success("Login Success")
-                st.rerun()
-            else:
-                st.error("Wrong OTP")
-
-    # -------- RESET --------
-    elif menu=="Reset Password":
-        user = st.text_input("Username")
-
-        if st.button("Send OTP"):
-            otp = generate_otp()
-            st.session_state.reset_otp = otp
-            st.session_state.reset_user = user
-            st.warning(f"Reset OTP: {otp}")
-
-    if "reset_otp" in st.session_state:
-        otp = st.text_input("Enter OTP")
-        new_pass = st.text_input("New Password", type="password")
-
-        if st.button("Update Password"):
-            if otp == st.session_state.reset_otp:
-                hashed = bcrypt.hashpw(new_pass.encode(), bcrypt.gensalt()).decode()
-                cursor.execute("UPDATE users SET password=%s WHERE username=%s",
-                               (hashed, st.session_state.reset_user))
-                conn.commit()
-                st.success("Password Updated")
-            else:
-                st.error("Wrong OTP")
-
-    conn.close()
-
- 
-
-# --------------------------
+# =====================================================
 # FAKE DATA
-# --------------------------
+# =====================================================
 def generate_data():
-    users = ["admin", "user1", "user2", "hacker"]
-    ips = ["192.168.1.1", "10.0.0.5", "172.16.0.3", "45.33.32.1"]
 
-    status = ["success"] * 8 + ["failed"] * 2
+    users = [
+        "admin",
+        "user1",
+        "user2",
+        "hacker"
+    ]
+
+    ips = [
+        "192.168.1.1",
+        "10.0.0.5",
+        "172.16.0.3",
+        "45.33.32.1"
+    ]
+
+    status = (
+        ["success"] * 8 +
+        ["failed"] * 2
+    )
 
     data = []
+
     for _ in range(200):
+
         data.append({
-            "username": random.choice(users),
-            "ip_address": random.choice(ips),
-            "login_time": datetime.now() - timedelta(minutes=random.randint(1, 5000)),
-            "status": random.choice(status)
+
+            "username":
+            random.choice(users),
+
+            "ip_address":
+            random.choice(ips),
+
+            "login_time":
+            datetime.now()
+            - timedelta(
+                minutes=random.randint(1, 5000)
+            ),
+
+            "status":
+            random.choice(status)
         })
 
     return pd.DataFrame(data)
 
-# --------------------------
-# ADMIN PANEL (NEW)
-# --------------------------
+# =====================================================
+# ADMIN PANEL
+# =====================================================
 def admin_panel():
+
     st.subheader("👑 Admin Panel")
 
     conn = connect_db()
 
-    users = pd.read_sql("SELECT username, role FROM users", conn)
-    logs = pd.read_sql("SELECT * FROM logs ORDER BY login_time DESC", conn)
+    users = pd.read_sql(
+        "SELECT username, role FROM users",
+        conn
+    )
 
-    st.write("👤 Users")
+    logs_df = pd.read_sql(
+        "SELECT * FROM logs ORDER BY login_time DESC",
+        conn
+    )
+
+    st.write("### 👤 Users")
     st.dataframe(users)
 
-    del_user = st.text_input("Delete Username")
-    if st.button("Delete User"):
+    delete_user = st.text_input(
+        "Delete Username",
+        key="delete_user_input"
+    )
+
+    if st.button(
+        "Delete User",
+        key="delete_user_btn"
+    ):
+
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM users WHERE username=%s", (del_user,))
+
+        cursor.execute(
+            "DELETE FROM users WHERE username=%s",
+            (delete_user,)
+        )
+
         conn.commit()
+
         st.success("User Deleted")
 
-    st.write("📜 Logs")
-    st.dataframe(logs)
+    st.write("### 📜 Login Logs")
+    st.dataframe(logs_df)
 
     conn.close()
 
-# --------------------------
+# =====================================================
+# AUTH SYSTEM
+# =====================================================
+def auth():
+
+    st.markdown(
+        "<div class='login-box'>",
+        unsafe_allow_html=True
+    )
+
+    st.title("🔐 Cyber SOC Login")
+
+    menu = st.sidebar.selectbox(
+        "Menu",
+        [
+            "Login",
+            "Register",
+            "Reset Password"
+        ]
+    )
+
+    conn = connect_db()
+    cursor = conn.cursor()
+
+    # =================================================
+    # REGISTER
+    # =================================================
+    if menu == "Register":
+
+        username = st.text_input(
+            "Username",
+            key="reg_user"
+        )
+
+        password = st.text_input(
+            "Password",
+            type="password",
+            key="reg_pass"
+        )
+
+        if st.button(
+            "Register",
+            key="register_btn"
+        ):
+
+            if not username or not password:
+                st.error("All fields required")
+                return
+
+            hashed = hash_password(password)
+
+            cursor.execute("""
+                INSERT INTO users
+                (username,password,role)
+                VALUES (%s,%s,%s)
+            """, (
+                username,
+                hashed,
+                "user"
+            ))
+
+            conn.commit()
+
+            st.success("User Registered")
+
+    # =================================================
+    # LOGIN
+    # =================================================
+    elif menu == "Login":
+
+        username = st.text_input(
+            "Username",
+            key="login_user"
+        )
+
+        password = st.text_input(
+            "Password",
+            type="password",
+            key="login_pass"
+        )
+
+        # CAPTCHA
+        if "captcha" not in st.session_state:
+            st.session_state.captcha = generate_captcha()
+
+        st.write(
+            "Captcha:",
+            st.session_state.captcha
+        )
+
+        captcha_input = st.text_input(
+            "Enter Captcha",
+            key="captcha_input"
+        )
+
+        ip = get_real_ip()
+
+        # BLOCKED IP
+        if ip in st.session_state.blocked_ips:
+            st.error("🚫 Your IP is blocked")
+            st.stop()
+
+        # LOGIN BUTTON
+        if st.button(
+            "Login",
+            key="login_btn"
+        ):
+
+            if not username or not password:
+                st.error("All fields required")
+                return
+
+            if captcha_input != st.session_state.captcha:
+                st.error("Wrong Captcha")
+                return
+
+            cursor.execute("""
+                SELECT password, role
+                FROM users
+                WHERE username=%s
+            """, (username,))
+
+            data = cursor.fetchone()
+
+            if data:
+
+                stored_password, role = data
+
+                valid = verify_password(
+                    password,
+                    stored_password
+                )
+
+                if valid:
+
+                    otp = generate_otp()
+
+                    st.session_state.otp = otp
+                    st.session_state.temp_user = username
+                    st.session_state.temp_role = role
+
+                    st.warning(
+                        f"OTP (Demo): {otp}"
+                    )
+
+                else:
+                    save_log(username, "failed")
+                    st.error("Wrong Password")
+
+            else:
+                save_log(username, "failed")
+                st.error("User Not Found")
+
+        # OTP VERIFY
+        if "otp" in st.session_state:
+
+            entered_otp = st.text_input(
+                "Enter OTP",
+                key="otp_input"
+            )
+
+            if st.button(
+                "Verify OTP",
+                key="verify_otp_btn"
+            ):
+
+                if entered_otp == st.session_state.otp:
+
+                    st.session_state.logged_in = True
+
+                    st.session_state.role = (
+                        st.session_state.temp_role
+                    )
+
+                    save_log(
+                        st.session_state.temp_user,
+                        "success"
+                    )
+
+                    del st.session_state.otp
+
+                    st.success("Login Successful")
+
+                    st.rerun()
+
+                else:
+                    st.error("Wrong OTP")
+
+    # =================================================
+    # RESET PASSWORD
+    # =================================================
+    elif menu == "Reset Password":
+
+        username = st.text_input(
+            "Username",
+            key="reset_user"
+        )
+
+        if st.button(
+            "Send OTP",
+            key="send_otp_btn"
+        ):
+
+            otp = generate_otp()
+
+            st.session_state.reset_otp = otp
+            st.session_state.reset_user = username
+
+            st.warning(
+                f"Reset OTP: {otp}"
+            )
+
+        if "reset_otp" in st.session_state:
+
+            entered_otp = st.text_input(
+                "Enter OTP",
+                key="reset_otp_input"
+            )
+
+            new_password = st.text_input(
+                "New Password",
+                type="password",
+                key="new_pass_input"
+            )
+
+            if st.button(
+                "Update Password",
+                key="update_pass_btn"
+            ):
+
+                if entered_otp == st.session_state.reset_otp:
+
+                    hashed = hash_password(
+                        new_password
+                    )
+
+                    cursor.execute("""
+                        UPDATE users
+                        SET password=%s
+                        WHERE username=%s
+                    """, (
+                        hashed,
+                        st.session_state.reset_user
+                    ))
+
+                    conn.commit()
+
+                    st.success("Password Updated")
+
+                else:
+                    st.error("Wrong OTP")
+
+    conn.close()
+
+# =====================================================
 # DASHBOARD
-# --------------------------
+# =====================================================
 def dashboard():
+
     st.title("💻 Cybersecurity SOC Dashboard")
 
-    # LOGOUT
-    if st.sidebar.button("Logout", key="logout_btn"):
+    # =================================================
+    # SIDEBAR
+    # =================================================
+    st.sidebar.title("⚙️ Controls")
+
+    if st.sidebar.button(
+        "Logout",
+        key="logout_btn"
+    ):
+
         st.session_state.logged_in = False
         st.rerun()
 
-    # LOAD DATA
-    file = st.file_uploader("Upload CSV", type=["csv"])
+    # =================================================
+    # CSV UPLOAD
+    # =================================================
+    file = st.sidebar.file_uploader(
+        "Upload CSV",
+        type=["csv"]
+    )
 
     if file:
         df = pd.read_csv(file)
     else:
         df = generate_data()
 
-    # PROCESS
-    df['login_time'] = pd.to_datetime(df['login_time'])
-    df['hour'] = df['login_time'].dt.hour
-    df['date'] = df['login_time'].dt.date
+    # =================================================
+    # PROCESS DATA
+    # =================================================
+    df["login_time"] = pd.to_datetime(
+        df["login_time"]
+    )
 
+    df["hour"] = df["login_time"].dt.hour
+    df["date"] = df["login_time"].dt.date
+
+    # =================================================
     # TABS
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "📜 Logs", "💀 Threat Intel","💣 Attack" ])
+    # =================================================
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Dashboard",
+        "📜 Logs",
+        "💀 Threat Intel",
+        "💣 Attack Simulation"
+    ])
 
-    # ---------------- TAB 1 ----------------
+    # =================================================
+    # TAB 1 DASHBOARD
+    # =================================================
     with tab1:
-        st.subheader("📊 Overview")
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total", len(df))
-        c2.metric("Failed", len(df[df['status']=="failed"]))
-        c3.metric("Users", df['username'].nunique())
+        st.subheader("📊 Top Metrics")
+
+        c1, c2, c3, c4 = st.columns(4)
+
+        c1.metric(
+            "Total Logs",
+            len(df)
+        )
+
+        c2.metric(
+            "Failed Logins",
+            len(df[df["status"] == "failed"])
+        )
+
+        c3.metric(
+            "Users",
+            df["username"].nunique()
+        )
+
+        c4.metric(
+            "Blocked IPs",
+            len(st.session_state.blocked_ips)
+        )
 
         # ALERTS
-        st.subheader("🚨 Alerts")
-        failed = df[df['status']=="failed"]
-        count_ip = failed.groupby('ip_address').size()
+        st.subheader("🚨 Security Alerts")
+
+        failed = df[df["status"] == "failed"]
+
+        count_ip = failed.groupby(
+            "ip_address"
+        ).size()
 
         for ip, c in count_ip.items():
+
             if c > 10:
-                st.error(f"{ip} BLOCKED")
+
+                st.error(
+                    f"{ip} BLOCKED ({c} attempts)"
+                )
+
                 if ip not in st.session_state.blocked_ips:
                     st.session_state.blocked_ips.append(ip)
 
-        st.plotly_chart(px.bar(df,x='ip_address',color='status'))
+            elif c >= 5:
 
-        # GRAPH
+                st.warning(
+                    f"{ip} Suspicious ({c} attempts)"
+                )
+
+        # =================================================
+        # CHARTS
+        # =================================================
         col1, col2 = st.columns(2)
 
-        fig1 = px.bar(
-            failed.groupby('ip_address').size().reset_index(name='count'),
-            x='ip_address', y='count'
+        with col1:
+
+            top_ips = (
+                failed.groupby("ip_address")
+                .size()
+                .reset_index(name="count")
+            )
+
+            fig_bar = px.bar(
+                top_ips,
+                x="ip_address",
+                y="count",
+                color="count",
+                title="Top Failed Login IPs",
+                template="plotly_dark"
+            )
+
+            st.plotly_chart(
+                fig_bar,
+                use_container_width=True
+            )
+
+        with col2:
+
+            fig_pie = px.pie(
+                df,
+                names=["Brute Force","SQL Injection","Access","Suspicious"],
+                title="Anomalies by Type",
+                template="plotly_dark"
+            )
+
+            st.plotly_chart(
+                fig_pie,
+                use_container_width=True
+            )
+
+        # =================================================
+        # LOGIN ACTIVITY GRAPH
+        # =================================================
+        st.subheader("📈 Login Activity")
+
+        activity = (
+            df.groupby("date")
+            .size()
+            .reset_index(name="logins")
         )
-        col1.plotly_chart(fig1, use_container_width=True)
+        # CREATE VARIABLES FIRST
+        dates = activity["date"]
+        logs = activity["logins"]
+        
+        # TREND LINE
+        anomaly = logs.rolling(
+            window=2,
+            min_periods=1
+        ).mean()
+        
+        # CREATE FIGURE
+        fig = go.Figure()
+        
+        # LOG GRAPH
+        fig.add_trace(
+            go.Scatter(
+                x=dates,
+                y=logs,
+                mode="lines+markers",
+                name="Logs"
+            )
+        )
 
-        fig2 = px.pie(df, names='status')
-        col2.plotly_chart(fig2, use_container_width=True)
+        # TREND GRAPH
+        fig.add_trace(
+            go.Scatter(
+                x=dates,
+                y=anomaly,
+                mode="lines",
+                name="Trend"
+            )
+        )
+        # LAYOUT
+        fig.update_layout(
+            template="plotly_dark",
+            title="Login Trend Analysis",
+            height=400
+        )
 
-        # LINE
-        activity = df.groupby('date').size().reset_index(name='logins')
-        st.plotly_chart(px.line(activity, x='date', y='logins'), use_container_width=True)
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
 
+        # =================================================
         # HEATMAP
-        heatmap = df.groupby(['hour', 'status']).size().unstack(fill_value=0)
-        st.plotly_chart(px.imshow(heatmap), use_container_width=True)
+        # =================================================
+        st.subheader("🔥 Heatmap")
 
-        # ML
+        heatmap = df.groupby(
+            ["hour", "status"]
+        ).size().unstack(fill_value=0)
+
+        fig_heat = px.imshow(
+            heatmap,
+            aspect="auto",
+            template="plotly_dark"
+        )
+
+        st.plotly_chart(
+            fig_heat,
+            use_container_width=True
+        )
+
+        # =================================================
+        # ANOMALY DETECTION
+        # =================================================
         st.subheader("🤖 Anomaly Detection")
-        df['is_failed'] = (df['status']=="failed").astype(int)
 
-        model = IsolationForest(contamination=0.1, random_state=42)
-        df['anomaly'] = model.fit_predict(df[['hour','is_failed']])
+        df["is_failed"] = (
+            df["status"] == "failed"
+        ).astype(int)
 
-        st.dataframe(df[df['anomaly'] == -1])
+        model = IsolationForest(
+            contamination=0.1,
+            random_state=42
+        )
 
-    # ---------------- TAB 2 ----------------
+        df["anomaly"] = model.fit_predict(
+            df[["hour", "is_failed"]]
+        )
+
+        st.dataframe(
+            df[df["anomaly"] == -1]
+        )
+
+        # =================================================
+        # RECENT TABLE
+        # =================================================
+        st.subheader("📋 Recent Logs")
+        activity = (
+            df.groupby("date")
+            .size()
+            .reset_index(name="logins")
+        )
+
+        # IMPORTANT
+        rows = min(len(activity ),10)
+        recent_df = pd.DataFrame({
+            "Time": activity["date"].tail(rows).astype(str).tolist(),
+            "IP": [f"192.168.1.{i}" for i in range(rows)],
+            "Event": random.choices(
+                ["Login Fail", "SQL Attack", "Access"],
+                k=rows
+            ),
+            "Severity": random.choices(
+                ["Low", "Medium", "High"],
+                k=rows
+            )
+        })
+
+        st.dataframe(
+            recent_df,
+            use_container_width=True
+        )
+
+    # =================================================
+    # TAB 2 LOGS
+    # =================================================
     with tab2:
-        logs = pd.read_sql("SELECT * FROM logs ORDER BY login_time DESC", connect_db())
-        search = st.text_input("Search logs")
-        if search:
-            logs = logs[logs.astype(str).apply(lambda r: r.str.contains(search,case=False).any(),axis=1)]
-        st.dataframe(logs)
-    # ---------------- TAB 3 ----------------
-    with tab3:
-        df['is_failed']=(df['status']=="failed").astype(int)
-        model=IsolationForest(contamination=0.1)
-        df['anomaly']=model.fit_predict(df[['hour','is_failed']])
-        st.dataframe(df[df['anomaly']==-1])
 
-    # --------------TAB 4 -------------------
+        st.subheader("📜 Real Time Logs")
+
+        logs_df = pd.read_sql(
+            "SELECT * FROM logs ORDER BY login_time DESC",
+            connect_db()
+        )
+
+        search = st.text_input(
+            "Search Logs",
+            key="search_logs"
+        )
+
+        if search:
+
+            logs_df = logs_df[
+                logs_df.astype(str).apply(
+                    lambda row:
+                    row.str.contains(
+                        search,
+                        case=False
+                    ).any(),
+                    axis=1
+                )
+            ]
+
+        st.dataframe(logs_df)
+
+    # =================================================
+    # TAB 3 THREAT INTEL
+    # =================================================
+    with tab3:
+
+        st.subheader("💀 Threat Intelligence")
+
+        anomalies = df[df["anomaly"] == -1]
+
+        st.dataframe(anomalies)
+
+        # MAP
+        st.subheader("🌍 Attack Map")
+
+        loc_data = []
+
+        for ip in df["ip_address"].unique():
+
+            lat, lon = get_location(ip)
+
+            if lat and lon:
+
+                loc_data.append({
+                    "lat": lat,
+                    "lon": lon
+                })
+
+        if loc_data:
+            st.map(pd.DataFrame(loc_data))
+
+    # =================================================
+    # TAB 4 ATTACK SIMULATION
+    # =================================================
     with tab4:
+
         st.subheader("💣 Attack Simulation")
 
-        attack = st.selectbox("Attack Type",["Brute Force","DDoS"])
+        attack = st.selectbox(
+            "Attack Type",
+            [
+                "Brute Force",
+                "DDoS",
+                "SQL Injection"
+            ]
+        )
 
-        if st.button("Run Attack"):
-            for i in range(20):
-                save_log("hacker","failed")
-            st.error("Attack simulated")
+        if st.button(
+            "Run Attack",
+            key="attack_btn"
+        ):
 
-    if st.session_state.role=="admin":
-        admin_panel()
+            for _ in range(20):
+                save_log(
+                    "hacker",
+                    "failed"
+                )
 
-    
-      # MAP
-    st.subheader("🌍 Location Map")
-    loc_data = []
-    for ip in df['ip_address'].unique():
-        lat, lon = get_location(ip)
-        if lat and lon:
-            loc_data.append({"lat": lat, "lon": lon})
+            st.error(
+                f"{attack} Attack Simulated"
+            )
 
-    if loc_data:
-        st.map(pd.DataFrame(loc_data))
-
+    # =================================================
+    # ADMIN PANEL
+    # =================================================
     if st.session_state.role == "admin":
         admin_panel()
 
-    # DOWNLOAD
+    # =================================================
+    # DOWNLOAD REPORT
+    # =================================================
     st.download_button(
-        "Download CSV",
-        df.to_csv(index=False).encode('utf-8'),
-        "report.csv"
+        "📥 Download Report",
+        df.to_csv(index=False).encode("utf-8"),
+        "report.csv",
+        key="download_btn"
     )
 
-# --------------------------
+# =====================================================
 # MAIN
-# --------------------------
+# =====================================================
 if not st.session_state.logged_in:
     auth()
 else:
